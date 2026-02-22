@@ -41,7 +41,7 @@ def _weighted_consensus(votes: list[tuple[Verdict, float, str, int]]) -> tuple[V
     reasons: list[str] = []
     for verdict, conf, reasoning, weight in votes:
         total += _vote_to_int(verdict) * conf * weight
-        reasons.append(f"{verdict} (w={weight}, c={conf:.2f}): {reasoning}")
+        reasons.append(f"{verdict} (c={conf:.2f}): {reasoning}")
 
     # normalize to an int bucket
     if total >= 1.6:
@@ -58,11 +58,14 @@ def _weighted_consensus(votes: list[tuple[Verdict, float, str, int]]) -> tuple[V
 async def run_panel(*, ctx: PanelContext) -> EvaluationResult:
     config = PanelConfig(cross_exam_rounds=int(ctx.config.get("cross_exam_rounds", 1)))
 
-    agents = [
+    analysis_agents = [
         ResumeClaimsAgent(),
         TranscriptEvidenceAgent(),
         GapAnalysisAgent(),
         ContradictionHunterAgent(),
+    ]
+
+    panel_agents = [
         SystemsDesignJudgeAgent(),
         CodingJudgeAgent(),
         HiringManagerAgent(),
@@ -71,14 +74,26 @@ async def run_panel(*, ctx: PanelContext) -> EvaluationResult:
     trace: list[AgentMessage] = []
     results: dict[str, AgentResult] = {}
 
-    async def _run_agent(agent) -> None:
-        trace.append(AgentMessage(agent=agent.name, stage="initial", content="Running initial analysis"))
-        res = await agent.run(ctx)
+    async def _run_agent(*, agent, run_ctx: PanelContext, stage: str) -> None:
+        trace.append(AgentMessage(agent=agent.name, stage=stage, content="Running"))
+        res = await agent.run(run_ctx)
         results[agent.name] = res
-        trace.append(AgentMessage(agent=agent.name, stage="initial", content="Completed", meta={"artifacts_keys": list(res.artifacts.keys())}))
+        trace.append(
+            AgentMessage(agent=agent.name, stage=stage, content="Completed", meta={"artifacts_keys": list(res.artifacts.keys())})
+        )
 
-    # Initial round: parallelizable
-    await asyncio.gather(*[_run_agent(a) for a in agents])
+    # Phase 1: analysis (parallelizable)
+    await asyncio.gather(*[_run_agent(agent=a, run_ctx=ctx, stage="analysis") for a in analysis_agents])
+
+    claims = results["resume-claims"].artifacts.get("claims", [])
+    chunks = results["transcript-evidence"].artifacts.get("chunks", [])
+
+    weak_claims: list[tuple[str, str, float]] = []
+    if isinstance(claims, list) and isinstance(chunks, list):
+        for c in claims[:20]:
+            ev, score = _best_evidence(str(c), [str(x) for x in chunks])
+            if score < 0.22:
+                weak_claims.append((str(c), ev, score))
 
     # Build discrepancy list: start from contradiction findings + claim evidence mismatches
     discrepancies: list[Discrepancy] = []
@@ -95,16 +110,6 @@ async def run_panel(*, ctx: PanelContext) -> EvaluationResult:
             )
         )
 
-    claims = results["resume-claims"].artifacts.get("claims", [])
-    chunks = results["transcript-evidence"].artifacts.get("chunks", [])
-
-    weak_claims: list[tuple[str, str, float]] = []
-    if isinstance(claims, list) and isinstance(chunks, list):
-        for c in claims[:20]:
-            ev, score = _best_evidence(str(c), [str(x) for x in chunks])
-            if score < 0.22:
-                weak_claims.append((str(c), ev, score))
-
     for c, ev, score in weak_claims[:10]:
         discrepancies.append(
             Discrepancy(
@@ -119,6 +124,44 @@ async def run_panel(*, ctx: PanelContext) -> EvaluationResult:
             )
         )
 
+    gap_art = results["gap-analysis"].artifacts
+    requirements = gap_art.get("requirements", []) if isinstance(gap_art, dict) else []
+    gaps = gap_art.get("gaps", []) if isinstance(gap_art, dict) else []
+    covered = gap_art.get("covered", []) if isinstance(gap_art, dict) else []
+
+    coverage_ratio = 0.0
+    try:
+        total = float(len(requirements))
+        if total > 0:
+            coverage_ratio = float(len(covered)) / total
+    except Exception:
+        coverage_ratio = 0.0
+
+    contradiction_count = len(results["contradiction-hunter"].findings)
+    high_discrepancy_count = sum(1 for d in discrepancies if d.severity == "high")
+
+    derived_signals: dict[str, Any] = {
+        "requirements_count": len(requirements) if isinstance(requirements, list) else 0,
+        "gaps_count": len(gaps) if isinstance(gaps, list) else 0,
+        "covered_count": len(covered) if isinstance(covered, list) else 0,
+        "coverage_ratio": coverage_ratio,
+        "top_gaps": gaps[:6] if isinstance(gaps, list) else [],
+        "contradiction_count": contradiction_count,
+        "weak_claims_count": len(weak_claims),
+        "high_discrepancy_count": high_discrepancy_count,
+        "discrepancy_count": len(discrepancies),
+    }
+
+    panel_ctx = PanelContext(
+        job_description=ctx.job_description,
+        resume=ctx.resume,
+        transcript=ctx.transcript,
+        config={**(ctx.config or {}), "panelai_signals": derived_signals},
+    )
+
+    # Phase 2: panel votes (parallelizable)
+    await asyncio.gather(*[_run_agent(agent=a, run_ctx=panel_ctx, stage="panel") for a in panel_agents])
+
     # Cross-exam: have judges challenge top discrepancies
     if config.cross_exam_rounds > 0 and discrepancies:
         top = sorted(discrepancies, key=lambda d: {"high": 0, "medium": 1, "low": 2}[d.severity])[:5]
@@ -130,7 +173,7 @@ async def run_panel(*, ctx: PanelContext) -> EvaluationResult:
                 )
                 for agent in (SystemsDesignJudgeAgent(), CodingJudgeAgent(), HiringManagerAgent()):
                     trace.append(AgentMessage(agent=agent.name, stage=f"cross-exam-{round_idx+1}", content=challenge))
-                    response = await agent.respond_to_challenge(ctx, challenge)
+                    response = await agent.respond_to_challenge(panel_ctx, challenge)
                     trace.append(
                         AgentMessage(
                             agent=agent.name,
@@ -189,6 +232,7 @@ async def run_panel(*, ctx: PanelContext) -> EvaluationResult:
     artifacts: dict[str, Any] = {
         "votes": [{"verdict": v, "confidence": c, "reason": r, "weight": w} for (v, c, r, w) in votes],
         "weak_claims": [{"claim": c, "score": s, "evidence": ev} for (c, ev, s) in weak_claims],
+        "signals": derived_signals,
     }
 
     # Ensure minimal output lists
