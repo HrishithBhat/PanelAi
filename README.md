@@ -42,6 +42,39 @@ The backend orchestrates these components concurrently and then synthesizes a fi
 - Outputs: assessment, discrepancy log, strengths/risks, follow-up questions, verdict + reasoning, and agent trace
 - Live Interview Assist mode (optional): append transcript as you go and get near-real-time discrepancies + follow-ups (final verdict only on demand)
 
+## More about PanelAI
+
+### Core goals
+- **Consistency**: standardizes how interview feedback is structured across candidates.
+- **Evidence-first**: ties strengths/risks/discrepancies to specific resume/transcript signals.
+- **Actionability**: produces concrete follow-up questions for the next round.
+- **Auditability**: includes an agent trace so decisions are explainable.
+
+### Two modes
+
+**1) Panel Evaluation (full verdict)**
+- Generates a structured verdict/recommendation with supporting reasoning
+- Produces a discrepancy log (claims vs evidence) and prioritized follow-up questions
+- Returns agent artifacts so you can understand how the outcome was formed
+
+**2) Live Interview Assist (no auto-verdict)**
+- Designed for real-time interviewing: append transcript as the interview happens
+- Highlights contradictions/discrepancies and gaps vs job requirements
+- Suggests follow-up questions with evidence pointers
+- Final verdict is only generated when you explicitly run the full evaluation
+
+### High-level architecture
+PanelAI orchestrates specialized reviewer agents in parallel and then synthesizes results:
+- Resume claims extraction
+- Transcript evidence mining
+- Gap analysis vs role requirements
+- Contradiction detection
+- Synthesis/judging into a structured result + trace
+
+### Notes / limitations
+- Live mic transcription uses the browser Web Speech API (best in Chrome/Edge).
+- If you enable an external LLM provider, you may hit rate limits (HTTP 429). Heuristic mode avoids external calls.
+
 ## Quickstart
 
 ### Backend (FastAPI)
