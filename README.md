@@ -5,37 +5,6 @@ PanelAI is a full‑stack web app that helps HR/engineering teams evaluate a can
 It runs a **multi-agent interview panel** (custom orchestration; no pre-built “agent framework”) to flag discrepancies, generate follow-up questions, and produce an auditable evaluation trace.
 
 
-Why PanelAI
-Hiring feedback often becomes subjective, inconsistent, and hard to audit. PanelAI makes the evaluation:
-
-Evidence-driven (ties claims to resume/transcript snippets)
-Repeatable (same inputs → consistent structure of output)
-Actionable (concrete follow-ups and gap signals)
-Auditable (multi-agent trace instead of a single opaque blob)
-PanelAI returns:
-
-Verdict / recommendation (hire / no-hire style outcome, with justification)
-Strengths aligned to role needs
-Risks / concerns with supporting evidence
-Discrepancy log (conflicting or weakly supported statements)
-Follow-up questions prioritized for the next interview round
-Agent trace to understand how each reviewer reached its view
-2) Live Interview Assist (No Auto-Verdict)
-During a live interview, you can keep appending transcript text (typed/paste, or mic via browser speech recognition) while the system periodically analyzes the latest transcript and highlights:
-
-New contradictions / discrepancies
-Gaps vs job requirements
-High-value follow-up questions
-Evidence snippets to support each prompt.
-How It Works (High-Level)
-PanelAI uses a small set of specialized “reviewers” (agents) that each focus on one lens:
-
-Resume Claims: extracts key candidate claims and experience signals from the resume
-Transcript Evidence: finds supporting evidence in the transcript
-Gap Analysis: compares role requirements to candidate evidence (missing/weak areas)
-Contradiction Hunter: flags inconsistent statements or mismatches across sources
-Judges / Synthesizer: aggregates findings into a structured decision narrative and trace
-The backend orchestrates these components concurrently and then synthesizes a final response model.
 
 ## What you get
 - Web UI to upload the 3 inputs (JD / resume / transcript), paste text, or load provided samples
